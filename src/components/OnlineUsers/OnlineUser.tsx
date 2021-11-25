@@ -1,10 +1,7 @@
 import * as React from 'react';
+import { Online_Users, Users } from '../../generated/graphql';
 
-type user = {
-  name: string;
-}
-
-const OnlineUser = ({user}:{user: user}) => {
+const OnlineUser = ({user}:{user:Pick<Users, "name"> | null | undefined}) => {
   return (
     <div className="userInfo">
       <div className="userImg">

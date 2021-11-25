@@ -1,65 +1,134 @@
-import React, { Fragment, useState, useRef } from "react";
+import { gql, useSubscription, useApolloClient } from "@apollo/client";
+import React, { Fragment, useState, useRef, useEffect } from "react";
+import {
+  NotifyNewPublicTodosSubscription,
+  Todos,
+} from "../../generated/graphql";
 import TaskItem from "./TaskItem";
 
 type TodoItem = {
-  id: number,
-  title: string,
-  user: { name: string }
-}
+  id: number;
+  title: string;
+  user: { name: string };
+};
 
 type publicListProps = {
-  latestTodo?: TodoItem | null
-}
+  latestTodo?: TodoItem | null;
+};
 
 const TodoPublicList = (props: publicListProps) => {
-  const [olderTodosAvailable] = useState(props.latestTodo ? true : false)
-  const [newTodosCount] = useState(0)
-  const initialTodos = [
-    {
-      id: 1,
-      title: "This is public todo 1",
-      user: {
-        name: "someUser1"
-      }
-    },
-    {
-      id: 2,
-      title: "This is public todo 2",
-      is_completed: false,
-      is_public: true,
-      user: {
-        name: "someUser2"
-      }
-    },
-    {
-      id: 3,
-      title: "This is public todo 3",
-      user: {
-        name: "someUser3"
-      }
-    },
-    {
-      id: 4,
-      title: "This is public todo 4",
-      user: {
-        name: "someUser4"
-      }
-    }
-  ];
-  const [todos] = useState<TodoItem[]>(initialTodos);
+  const [olderTodosAvailable, setOlderTodosAvailable] = useState(
+    props.latestTodo ? true : false
+  );
+  const [newTodosCount, setNewTodosCount] = useState(0);
 
-  let oldestTodoId = useRef(props.latestTodo ? props.latestTodo.id + 1 : 0);
+  const [error, setError] = useState<Boolean>(false);
+  const [todos, setTodos] = useState<TodoItem[]>([]);
+
+  let oldestTodoId = useRef(props.latestTodo ? props.latestTodo.id + 1 : 0); // This is done this way so that during init we fetch the latest todo along with 6 older todos. see query
   let newestTodoId = useRef(props.latestTodo ? props.latestTodo.id : 0);
-  if(todos && todos.length) {
-    oldestTodoId.current = todos[todos.length - 1].id
+
+  console.log("newestTodoId while render "+ props.latestTodo?.id +" " + newestTodoId.current);
+
+  if (todos && todos.length) {
+    oldestTodoId.current = todos[todos.length - 1].id;
     newestTodoId.current = todos[0].id;
   }
 
-  const loadOlder = () => {
+  const client = useApolloClient();
+
+  const loadOlder = async () => {
+    const GET_OLD_PUBLIC_TODOS = gql`
+      query getOldPublicTodos($oldestTodo: Int!) {
+        todos(
+          where: { is_public: { _eq: true }, id: { _lt: $oldestTodo } }
+          limit: 7
+          order_by: { created_at: desc }
+        ) {
+          id
+          is_completed
+          title
+          user {
+            name
+          }
+        }
+      }
+    `;
+    const { data, networkStatus } = await client.query({
+      query: GET_OLD_PUBLIC_TODOS,
+      variables: { oldestTodo: oldestTodoId.current },
+    });
+
+    if (data.todos && data.todos.length) {
+      setTodos((prevTodos) => {
+        if (prevTodos) {
+          return [...prevTodos, ...data.todos];
+        } else {
+          return data.todos;
+        }
+      });
+      oldestTodoId.current = data.todos[data.todos.length - 1].id;
+    } else {
+      setOlderTodosAvailable(false);
+    }
+
+    if (networkStatus === 8) {
+      console.error(data);
+      setError(true);
+    }
   };
 
-  const loadNew = () => {
+  useEffect(() => {
+    loadOlder();
+  }, []);
+
+  const loadNew = async () => {
+    const GET_NEW_PUBLIC_TODOS = gql`
+      query getNewPublicTodos($latestVisibleId: Int) {
+        todos(
+          where: { is_public: { _eq: true }, id: { _gt: $latestVisibleId } }
+          order_by: { created_at: desc }
+        ) {
+          id
+          title
+          created_at
+          user {
+            name
+          }
+        }
+      }
+    `;
+    console.log("newestTodoId loadnew" + newestTodoId.current);
+    const { data, networkStatus } = await client.query({
+      query: GET_NEW_PUBLIC_TODOS,
+      variables: {
+        latestVisibleId: newestTodoId.current,
+      },
+    });
+    if (data && data.todos) {
+      setTodos((prevState) => {
+        if (prevState) {
+          return [...data.todos, ...prevState];
+        } else {
+          return data.todos;
+        }
+      });
+      setNewTodosCount(0);
+      newestTodoId.current = data.todos[0].id;
+    }
+    if (networkStatus === 8) {
+      console.error(data);
+      setError(true);
+    }
   };
+
+  useEffect(() => {
+    if (props.latestTodo && props.latestTodo.id! > newestTodoId.current) {
+      setNewTodosCount((n) => n + 1);
+      newestTodoId.current = props.latestTodo.id!; // why is this here?
+      console.log("newestTodoId use effect " + newestTodoId.current);
+    }
+  }, [props.latestTodo]);
 
   return (
     <Fragment>
@@ -78,13 +147,44 @@ const TodoPublicList = (props: publicListProps) => {
         </ul>
 
         <div className={"loadMoreSection"} onClick={() => loadOlder()}>
-          {olderTodosAvailable
-            ? "Load older tasks"
-            : "No more public tasks!"}
+          {olderTodosAvailable ? "Load older tasks" : "No more public tasks!"}
         </div>
       </div>
     </Fragment>
   );
 };
 
-export default TodoPublicList;
+const TodoPublicListSubscription = () => {
+  const NOTIFY_NEW_PUBLIC_TODOS = gql`
+    subscription notifyNewPublicTodos {
+      todos(
+        where: { is_public: { _eq: true } }
+        limit: 1
+        order_by: { created_at: desc }
+      ) {
+        id
+        title
+        user {
+          name
+        }
+        created_at
+      }
+    }
+  `;
+
+  const { loading, error, data } =
+    useSubscription<NotifyNewPublicTodosSubscription>(NOTIFY_NEW_PUBLIC_TODOS);
+  if (loading) {
+    return <span>Loading...</span>;
+  }
+  if (error || !data) {
+    return <span>Error</span>;
+  }
+
+  console.log(data.todos[0]);
+  return (
+    <TodoPublicList latestTodo={data.todos.length ? data.todos[0] : null} />
+  );
+};
+
+export default TodoPublicListSubscription;

@@ -1,45 +1,76 @@
-import React, { Fragment, useState } from "react";
+import React, { Fragment, useState, useEffect } from "react";
+import {gql, useQuery, useMutation} from "@apollo/client";
 import TodoItem from "./TodoItem";
 import TodoFilters from "./TodoFilters";
 
-type Todo = {
-  id: number,
-  title: string,
-  is_completed: boolean
-};
+ import {
+   GetMyTodosQuery,
+   Todos,
+   ClearCompletedMutation
+ } from '../../generated/graphql';
+
+
+export const GET_MY_TODOS = gql`
+    query getMyTodos {
+      todos(where: { is_public: { _eq: false} }, order_by: { created_at: desc }) {
+        id
+        title
+        created_at
+        is_completed
+      }
+    }
+`;
+
+export const CLEAR_COMPLETED = gql`
+    mutation clearCompleted {
+      delete_todos(where: {is_completed:{_eq:true}}){
+        affected_rows
+      }
+    }
+`;
 
 const TodoPrivateList = () => {
 
   const [filter, setFilter] = useState<string>("all");
-
-  const todos = [
-    {
-      id: 1,
-      title: "This is private todo 1",
-      is_completed: true
-    },
-    {
-      id: 2,
-      title: "This is private todo 2",
-      is_completed: false
-    }
-  ];
+  const {loading, error, data} = useQuery<GetMyTodosQuery>(GET_MY_TODOS);
 
   const filterResults = (filter: string): void => {
     setFilter(filter);
   };
 
+  const[deleteCompleted] = useMutation<ClearCompletedMutation>(CLEAR_COMPLETED, {
+    update(cache, {data}){
+      const existingTodos = cache.readQuery<GetMyTodosQuery>({query:GET_MY_TODOS});
+      const newTodos = existingTodos!.todos!.filter(t=>(!t.is_completed));
+      cache.writeQuery<GetMyTodosQuery>({
+        query:GET_MY_TODOS,
+        data:{
+          todos:newTodos
+        }
+      })
+    }
+  });
+
   const clearCompleted = () => {
+    deleteCompleted();
   };
 
-  let filteredTodos = todos;
-  if (filter === "active") {
-    filteredTodos = todos.filter((todo: Todo) => todo.is_completed !== true);
-  } else if (filter === "completed") {
-    filteredTodos = todos.filter((todo: Todo) => todo.is_completed === true);
+
+  if(loading){
+    return <div>Loadingzzz...</div>
+  }
+  if(error || !data ){
+    return <div>{error?.message}</div>
   }
 
-  const todoList = filteredTodos.map((todo: Todo, index: number) => (
+  let filteredTodos = data!.todos;
+  if (filter === "active") {
+    filteredTodos = data!.todos.filter((todo: Pick<Todos, "id" | "title" | "is_completed">) => todo.is_completed !== true);
+  } else if (filter === "completed") {
+    filteredTodos = data!.todos.filter((todo: Pick<Todos, "id" | "title" | "is_completed">) => todo.is_completed === true);
+  }
+
+  const todoList = filteredTodos!.map((todo: Pick<Todos, "id" | "title" | "is_completed">, index: number) => (
     <TodoItem
       key={'item'+index}
       index={index}
